@@ -223,9 +223,11 @@ class FloatingDotService : Service() {
     private fun showLockOverlay() {
         if (lockOverlay != null) return
 
-        // Create a view that consumes all touch events
+        // Create an INVISIBLE view that consumes all touch events.
+        // The background is completely transparent so the video underneath
+        // stays fully visible. The lock state is indicated by the dot icon change.
         lockOverlay = View(this).apply {
-            setBackgroundColor(0xCC000000.toInt())
+            setBackgroundColor(0x00000000) // 0% opacity = fully transparent
             setOnTouchListener { _, _ -> true }
         }
 
