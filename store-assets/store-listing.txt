@@ -1,0 +1,33 @@
+APP NAME:
+Screen Lock for Kids
+
+SHORT DESCRIPTION (80 chars):
+Lock your screen while kids watch videos. Prevents accidental touches.
+
+FULL DESCRIPTION:
+Screen Lock for Kids helps parents prevent accidental touches while their children watch videos on Android devices.
+
+FEATURES:
+• Floating lock button - Stays on screen over any app (YouTube, WhatsApp, etc.)
+• One-tap lock - Instantly block all touch input
+• One-tap unlock - Tap the floating button again to restore touch
+• Draggable - Move the floating button anywhere on screen
+• Lightweight - No internet required, no data collection
+
+HOW TO USE:
+1. Open any video app (YouTube, Netflix, etc.)
+2. Tap the floating lock button
+3. Screen is locked - your child can watch without interruption
+4. Tap the floating button again to unlock
+
+PRIVACY:
+• No internet access required
+• No personal data collected
+• No analytics or tracking
+• Everything stays on your device
+
+PERMISSIONS:
+• Display over other apps - Required to show the floating lock button
+• Foreground service - Keeps the floating button visible
+
+NOTE: This app is designed for parental use. Please supervise your children when using devices.
