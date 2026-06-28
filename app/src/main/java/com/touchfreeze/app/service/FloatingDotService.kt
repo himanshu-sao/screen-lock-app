@@ -18,7 +18,13 @@ import android.widget.ImageButton
 import androidx.core.app.NotificationCompat
 import com.touchfreeze.app.MainActivity
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
+/**
+ * Foreground service that displays a floating dot over other apps.
+ * Tapping the dot toggles the screen lock.
+ * Long-pressing shows a close button.
+ */
 class FloatingDotService : Service() {
 
     companion object {
@@ -29,16 +35,25 @@ class FloatingDotService : Service() {
     }
 
     private var windowManager: WindowManager? = null
-    private var floatingView: View? = null
+
+    // Floating dot (main UI)
+    private var dotButton: ImageButton? = null
+    private var dotParams: WindowManager.LayoutParams? = null
+    private var closeButton: ImageButton? = null
+    private var closeParams: WindowManager.LayoutParams? = null
+
+    // Lock overlay
     private var lockOverlay: View? = null
     private var isLocked = false
 
+    // Touch tracking
     private var initialX = 0
     private var initialY = 0
     private var initialTouchX = 0f
     private var initialTouchY = 0f
     private var isDragging = false
     private val dragThreshold = 20f
+    private var longPressPending = false
 
     override fun onCreate() {
         super.onCreate()
@@ -61,11 +76,12 @@ class FloatingDotService : Service() {
     }
 
     private fun showFloatingDot() {
-        if (floatingView != null) return
+        if (dotButton != null) return
 
+        // Create the floating dot
         val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
+            dpToPx(56),
+            dpToPx(56),
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
             } else {
@@ -76,23 +92,66 @@ class FloatingDotService : Service() {
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = 0
-            y = 200
+            x = 20
+            y = 400
         }
+        dotParams = params
 
-        floatingView = ImageButton(this).apply {
+        dotButton = ImageButton(this).apply {
             setImageResource(android.R.drawable.ic_lock_lock)
             background = null
-            alpha = 0.6f
-            setOnTouchListener { view, event ->
-                handleDotTouch(event, view, params)
+            alpha = 0.7f
+            setOnTouchListener { _, event ->
+                handleDotTouch(event, params)
             }
         }
 
-        windowManager?.addView(floatingView, params)
+        windowManager?.addView(dotButton, params)
     }
 
-    private fun handleDotTouch(event: MotionEvent, view: View, params: WindowManager.LayoutParams): Boolean {
+    private fun showCloseButton() {
+        if (closeButton != null) {
+            closeButton?.visibility = View.VISIBLE
+            return
+        }
+
+        val params = WindowManager.LayoutParams(
+            dpToPx(40),
+            dpToPx(40),
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            } else {
+                @Suppress("DEPRECATION")
+                WindowManager.LayoutParams.TYPE_PHONE
+            },
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = dotParams?.x ?: 20
+            y = (dotParams?.y ?: 400) + dpToPx(60)
+        }
+        closeParams = params
+
+        closeButton = ImageButton(this).apply {
+            setImageResource(android.R.drawable.ic_delete)
+            background = null
+            alpha = 0.9f
+            setColorFilter(0xFFE91E63.toInt()) // Pink
+            setOnClickListener {
+                hideCloseButton()
+                stopSelf()
+            }
+        }
+
+        windowManager?.addView(closeButton, params)
+    }
+
+    private fun hideCloseButton() {
+        closeButton?.visibility = View.GONE
+    }
+
+    private fun handleDotTouch(event: MotionEvent, params: WindowManager.LayoutParams): Boolean {
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
                 initialX = params.x
@@ -100,6 +159,10 @@ class FloatingDotService : Service() {
                 initialTouchX = event.rawX
                 initialTouchY = event.rawY
                 isDragging = false
+                longPressPending = true
+
+                // Schedule long-press detection
+                dotButton?.postDelayed(longPressRunnable, 500)
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
@@ -108,28 +171,50 @@ class FloatingDotService : Service() {
 
                 if (!isDragging && (abs(deltaX) > dragThreshold || abs(deltaY) > dragThreshold)) {
                     isDragging = true
+                    longPressPending = false
+                    dotButton?.removeCallbacks(longPressRunnable)
                 }
 
                 if (isDragging) {
                     params.x = initialX + deltaX.toInt()
                     params.y = initialY + deltaY.toInt()
-                    windowManager?.updateViewLayout(view, params)
+                    windowManager?.updateViewLayout(dotButton, params)
+
+                    // Move close button too if visible
+                    closeButton?.let { cb ->
+                        closeParams?.x = params.x
+                        closeParams?.y = params.y + dpToPx(60)
+                        closeParams?.let { cp -> windowManager?.updateViewLayout(cb, cp) }
+                    }
                 }
                 return true
             }
             MotionEvent.ACTION_UP -> {
-                if (!isDragging) {
+                dotButton?.removeCallbacks(longPressRunnable)
+
+                if (!isDragging && longPressPending) {
+                    // It was a tap, toggle lock
                     toggleLock()
                 }
+
+                isDragging = false
+                longPressPending = false
                 return true
             }
         }
         return false
     }
 
+    private val longPressRunnable = Runnable {
+        if (!isDragging) {
+            longPressPending = false
+            showCloseButton()
+        }
+    }
+
     private fun toggleLock() {
         if (isLocked) {
-            showUnlockPrompt()
+            hideLockOverlay()
         } else {
             showLockOverlay()
         }
@@ -138,10 +223,10 @@ class FloatingDotService : Service() {
     private fun showLockOverlay() {
         if (lockOverlay != null) return
 
-        // 1. Add the lock overlay first (behind the dot)
+        // Create a view that consumes all touch events
         lockOverlay = View(this).apply {
-            setBackgroundColor(0x80000000.toInt())
-            setOnTouchListener { _, _ -> true } // Consume all touch events
+            setBackgroundColor(0xCC000000.toInt())
+            setOnTouchListener { _, _ -> true }
         }
 
         val overlayParams = WindowManager.LayoutParams(
@@ -153,27 +238,31 @@ class FloatingDotService : Service() {
                 @Suppress("DEPRECATION")
                 WindowManager.LayoutParams.TYPE_PHONE
             },
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         )
 
         windowManager?.addView(lockOverlay, overlayParams)
 
-        // 2. Bring the floating dot to the front by re-adding it
-        // The last view added to WindowManager is on top
-        floatingView?.let { fv ->
-            val dotParams = fv.layoutParams as WindowManager.LayoutParams
-            windowManager?.removeView(fv)
-            windowManager?.addView(fv, dotParams)
+        // Bring floating dot to front
+        dotButton?.let { dot ->
+            val dp = dot.layoutParams as WindowManager.LayoutParams
+            windowManager?.removeView(dot)
+            windowManager?.addView(dot, dp)
+        }
+
+        // Also bring close button if visible
+        closeButton?.let { cb ->
+            val cp = cb.layoutParams as WindowManager.LayoutParams
+            windowManager?.removeView(cb)
+            windowManager?.addView(cb, cp)
         }
 
         isLocked = true
-        // Change dot to unlock icon
-        (floatingView as? ImageButton)?.setImageResource(android.R.drawable.ic_secure)
-    }
-
-    private fun showUnlockPrompt() {
-        hideLockOverlay()
+        dotButton?.setImageResource(android.R.drawable.ic_secure)
+        dotButton?.alpha = 1.0f
     }
 
     private fun hideLockOverlay() {
@@ -182,17 +271,22 @@ class FloatingDotService : Service() {
             lockOverlay = null
         }
         isLocked = false
-        (floatingView as? ImageButton)?.setImageResource(android.R.drawable.ic_lock_lock)
+        dotButton?.setImageResource(android.R.drawable.ic_lock_lock)
+        dotButton?.alpha = 0.7f
+    }
+
+    private fun dpToPx(dp: Int): Int {
+        return (dp * resources.displayMetrics.density).roundToInt()
     }
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "Floating Dot Service",
+                "Screen Lock for Kids",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Keeps the floating dot visible for screen lock"
+                description = "Keeps the floating lock button visible"
             }
             val notificationManager = getSystemService(NotificationManager::class.java)
             notificationManager.createNotificationChannel(channel)
@@ -209,8 +303,8 @@ class FloatingDotService : Service() {
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Touch Freeze Active")
-            .setContentText("Tap the floating dot to lock/unlock screen")
+            .setContentTitle("Screen Lock for Kids")
+            .setContentText("Tap the floating dot to lock your screen")
             .setSmallIcon(android.R.drawable.ic_lock_lock)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
@@ -219,9 +313,11 @@ class FloatingDotService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
-        floatingView?.let { windowManager?.removeView(it) }
+        dotButton?.let { windowManager?.removeView(it) }
+        closeButton?.let { windowManager?.removeView(it) }
         hideLockOverlay()
-        floatingView = null
+        dotButton = null
+        closeButton = null
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
